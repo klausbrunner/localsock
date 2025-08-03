@@ -9,10 +9,10 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>localsock-test</artifactId>
+    <artifactId>localsock-benchmark</artifactId>
 
     <description>
-        Test application for in-memory socket functionality.
+        Performance and stress tests for in-memory socket functionality.
     </description>
 
     <dependencies>
@@ -25,7 +25,6 @@
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>5.13.4</version>
-            <scope>test</scope>
         </dependency>
     </dependencies>
 
