@@ -1,24 +1,68 @@
 localsock
 =========
 
-An experiment to transparently "shortcut" localhost TCP connections within the same JVM.
+Transparent in-memory socket implementations for localhost TCP connections within the same JVM.
 
-The idea is to detect if both sides of a TCP connection are within the same JVM and use simple intra-memory copies instead of passing stuff up and down the OS TCP/IP stack. Preferably without changing a single line in application code, so it would work fine with an off-the-shelf application server. All this without relying too much on JDK or even OS internals, so it should work on any standard Java runtime.
+Originally built in 2013 on Java 7 as a proof of concept (with mixed results), this is a total overhaul to see if the idea works better on modern Java 21+. 
+_Note that this is still EXPERIMENTAL code._
 
-Status
-------
-
-Pre-alpha, a.k.a. "this might turn out to be a silly idea after all".
-
-*As of this writing, it's just a proof of concept. There are known bugs (leaks, mostly) and probably many unknown ones.*
+Uses modern Java's SelectorProvider SPI to transparently intercept localhost socket connections, providing in-memory
+implementations that bypass the OS TCP/IP stack while requiring zero changes to existing code.
 
 Requirements
 ------------
 
-* Java 7 to run
+* Java 21+ to run
 * Maven 3 to build
 
-Usage
------
+Transparent Usage
+-----------------
 
-See the localsock-test project for usage info.
+**Approach 1: Automatic via SPI (when library is on classpath)**
+
+```java
+// Standard Java NIO code - no changes needed!
+ServerSocketChannel server = ServerSocketChannel.open();
+server.
+
+bind(new InetSocketAddress("localhost", 8080));
+
+SocketChannel client = SocketChannel.open();
+client.
+
+connect(new InetSocketAddress("localhost", 8080));
+// Localhost connections automatically use in-memory sockets
+```
+
+**Approach 2: System property activation**
+
+```bash
+java -Djava.nio.channels.spi.SelectorProvider=com.localsock.InMemorySelectorProvider YourApp
+```
+
+**Approach 3: Explicit API (when you need control)**
+
+```java
+// Explicit in-memory usage
+ServerSocketChannel server = InMemoryChannelProvider.openInMemoryServerSocketChannel();
+SocketChannel client = InMemoryChannelProvider.openInMemorySocketChannel(remoteAddress);
+```
+
+Testing
+-------
+
+Run the JUnit test suite:
+
+```bash
+mvn clean test
+```
+
+Or run the demo applications:
+
+```bash
+# Test explicit in-memory API
+mvn exec:java -pl localsock-test -Dexec.mainClass="com.localsock.InMemorySocketTest"
+
+# Test transparent interception (standard Java NIO APIs)
+mvn exec:java -pl localsock-test -Dexec.mainClass="com.localsock.TransparentTest"
+```
