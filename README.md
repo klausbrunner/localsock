@@ -1,13 +1,13 @@
 localsock
 =========
 
+_Note that this is EXPERIMENTAL code._
+
 Transparent in-memory socket implementations for localhost TCP connections within the same JVM.
 
 Originally built in 2013 on Java 7 as a proof of concept (with mixed results), this is a total overhaul to see if the idea works better on modern Java 21+. 
-_Note that this is still EXPERIMENTAL code._
 
-Uses modern Java's SelectorProvider SPI to transparently intercept localhost socket connections, providing in-memory
-implementations that bypass the OS TCP/IP stack while requiring zero changes to existing code.
+So far, benchmarks show that this is actually _slower_ than going through the OS. The idea was that staying in the JVM might save some overhead - but it looks like we can't beat the decades-long perf optimisation that has gone into the kernel's networking infrastructure.
 
 Requirements
 ------------

@@ -29,6 +29,10 @@ public class InMemorySocketChannel extends SocketChannel {
     private static final ThreadLocal<ByteBuffer> BUFFER_POOL =
             ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(BUFSIZE));
 
+    // Pool for larger direct buffers to avoid allocation overhead
+    private static final ThreadLocal<ByteBuffer> LARGE_BUFFER_POOL =
+            ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(BUFSIZE * 4));
+
     private final ConcurrentLinkedQueue<ByteBuffer> incomingData = new ConcurrentLinkedQueue<>();
     private final String connectionKey;
     final AtomicBoolean connected = new AtomicBoolean(false); // Package private for registry access
@@ -174,6 +178,9 @@ public class InMemorySocketChannel extends SocketChannel {
             // If there's still data in the buffer, put it back
             if (data.hasRemaining()) {
                 incomingData.offer(data);
+            } else {
+                // Return small/medium buffers to pool for reuse
+                returnBufferToPool(data);
             }
 
             return bytesToRead;
@@ -206,18 +213,10 @@ public class InMemorySocketChannel extends SocketChannel {
                 return 0;
             }
 
-            ByteBuffer copy;
-            if (bytesToWrite <= BUFSIZE) {
-                ByteBuffer pooled = BUFFER_POOL.get().clear();
-                if (pooled.remaining() >= bytesToWrite) {
-                    pooled.put(src).flip();
-                    copy = ByteBuffer.allocate(bytesToWrite).put(pooled).flip();
-                } else {
-                    copy = ByteBuffer.allocate(bytesToWrite).put(src).flip();
-                }
-            } else {
-                copy = ByteBuffer.allocate(bytesToWrite).put(src).flip();
-            }
+            ByteBuffer copy = getDirectBuffer(bytesToWrite);
+            copy.clear();
+            copy.put(src);
+            copy.flip();
 
             peerChannel.incomingData.offer(copy);
 
@@ -233,6 +232,26 @@ public class InMemorySocketChannel extends SocketChannel {
         } finally {
             writeLock.unlock();
         }
+    }
+
+    /**
+     * Get a direct buffer of appropriate size, using pools when possible.
+     */
+    private ByteBuffer getDirectBuffer(int size) {
+        if (size <= BUFSIZE) {
+            ByteBuffer pooled = BUFFER_POOL.get();
+            if (pooled.capacity() >= size) {
+                return pooled;
+            }
+        } else if (size <= BUFSIZE * 4) {
+            ByteBuffer largePooled = LARGE_BUFFER_POOL.get();
+            if (largePooled.capacity() >= size) {
+                return largePooled;
+            }
+        }
+
+        // For very large messages, allocate directly (no pooling)
+        return ByteBuffer.allocateDirect(size);
     }
 
     @Override
@@ -268,5 +287,31 @@ public class InMemorySocketChannel extends SocketChannel {
 
     public String getConnectionKey() {
         return connectionKey;
+    }
+
+    /**
+     * Return buffer to appropriate pool for reuse if it's a pooled buffer.
+     */
+    private void returnBufferToPool(ByteBuffer buffer) {
+        if (!buffer.isDirect()) {
+            return; // Only pool direct buffers
+        }
+
+        int capacity = buffer.capacity();
+        if (capacity == BUFSIZE) {
+            // Return to small buffer pool (already thread-local, so just clear it)
+            ByteBuffer pooled = BUFFER_POOL.get();
+            if (pooled == buffer) {
+                // This is our pooled buffer, just clear it for next use
+                buffer.clear();
+            }
+        } else if (capacity == BUFSIZE * 4) {
+            // Return to large buffer pool
+            ByteBuffer largePooled = LARGE_BUFFER_POOL.get();
+            if (largePooled == buffer) {
+                buffer.clear();
+            }
+        }
+        // For other sizes, let GC handle it
     }
 }
