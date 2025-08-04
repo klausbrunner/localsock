@@ -28,4 +28,53 @@
         </dependency>
     </dependencies>
 
+    <profiles>
+        <!-- Performance tests - only run when explicitly requested -->
+        <profile>
+            <id>performance</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <version>3.2.5</version>
+                        <configuration>
+                            <includes>
+                                <include>**/*PerformanceTest.java</include>
+                                <include>**/*Benchmark*.java</include>
+                                <include>**/*Performance*.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        
+        <!-- Default profile excludes performance tests -->
+        <profile>
+            <id>default</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <version>3.2.5</version>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/*PerformanceTest.java</exclude>
+                                <exclude>**/*Benchmark*.java</exclude>
+                                <exclude>**/*Performance*.java</exclude>
+                                <exclude>**/*ConnectionOverheadAnalysis.java</exclude>
+                                <exclude>**/*ConnectionReuseTest.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>

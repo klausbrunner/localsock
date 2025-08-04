@@ -7,6 +7,7 @@ import java.net.SocketAddress;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
@@ -42,37 +43,47 @@ public class InMemorySocketRegistry {
         }
 
         String connectionKey = makeConnectionKey(remote);
+        LOG.fine("Client looking for server with key: " + connectionKey);
 
-        // Wait briefly for server to be available (helps with timing issues)
-        for (int attempt = 0; attempt < 50; attempt++) {
-            WeakReference<InMemoryServerSocketChannel> serverRef = servers.get(connectionKey);
-            if (serverRef != null) {
-                InMemoryServerSocketChannel server = serverRef.get();
-                if (server != null && server.isOpen()) {
-                    InMemorySocketChannel clientChannel =
-                            new InMemorySocketChannel(SelectorProvider.provider(), connectionKey);
+        // Look for server immediately
+        WeakReference<InMemoryServerSocketChannel> serverRef = servers.get(connectionKey);
+        if (serverRef != null) {
+            InMemoryServerSocketChannel server = serverRef.get();
+            if (server != null && server.isOpen()) {
+                InMemorySocketChannel clientChannel =
+                        new InMemorySocketChannel(SelectorProvider.provider(), connectionKey);
 
-                    // Add to pending connections for the server to accept
-                    pendingConnections
-                            .computeIfAbsent(connectionKey, k -> new ConcurrentLinkedQueue<>())
-                            .offer(clientChannel);
-                    LOG.fine("Client connection queued for server on " + connectionKey);
+                // Add to pending connections for the server to accept
+                pendingConnections
+                        .computeIfAbsent(connectionKey, k -> new ConcurrentLinkedQueue<>())
+                        .offer(clientChannel);
+                LOG.fine("Client connection queued for server on " + connectionKey);
 
-                    // Mark client as connected (it will be paired when server accepts)
-                    clientChannel.connected.set(true);
+                // Signal the server that a connection is available
+                server.signalConnectionAvailable();
+
+                // Wait for the server to complete the connection (setPeerChannel)
+                try {
+                    boolean connected = clientChannel.waitForConnection(5, TimeUnit.SECONDS);
+                    if (!connected) {
+                        // Remove from pending queue if connection timed out
+                        ConcurrentLinkedQueue<InMemorySocketChannel> pending = pendingConnections.get(connectionKey);
+                        if (pending != null) {
+                            pending.remove(clientChannel);
+                        }
+                        throw new IOException("Connection timeout - server did not accept connection to " + remote);
+                    }
+
+                    LOG.fine("Client connection established on " + connectionKey);
                     return clientChannel;
-                } else {
-                    // Clean up dead reference
-                    servers.remove(connectionKey);
-                }
-            }
 
-            // Brief wait before retry
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Interrupted while connecting", e);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting for connection", e);
+                }
+            } else {
+                // Clean up dead reference
+                servers.remove(connectionKey);
             }
         }
 
@@ -83,7 +94,7 @@ public class InMemorySocketRegistry {
     public static void registerServer(InMemoryServerSocketChannel server, SocketAddress local) {
         String connectionKey = makeConnectionKey(local);
         servers.put(connectionKey, new WeakReference<>(server));
-        LOG.fine("Server registered on " + connectionKey);
+        LOG.fine("Server registered with key: " + connectionKey);
     }
 
     /** Accept a pending connection for a server. */

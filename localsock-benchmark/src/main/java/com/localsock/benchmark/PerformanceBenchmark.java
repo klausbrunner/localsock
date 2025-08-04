@@ -15,8 +15,8 @@ import java.util.concurrent.TimeUnit;
  */
 public class PerformanceBenchmark {
 
-    private static final int WARMUP_ITERATIONS = 1000;
-    private static final int BENCHMARK_ITERATIONS = 10_000;
+    private static final int WARMUP_ITERATIONS = 5_000;
+    private static final int BENCHMARK_ITERATIONS = 50_000;
     private static final byte[] TEST_DATA = "Hello, World! This is a test message.".getBytes();
     private static final int PORT = 12345;
 
@@ -24,16 +24,36 @@ public class PerformanceBenchmark {
         System.out.println("Socket Performance Benchmark");
         System.out.println("============================");
 
-        // Warmup
-        System.out.println("Warming up...");
-        runBenchmark("Warmup In-Memory", true, WARMUP_ITERATIONS);
-        runBenchmark("Warmup Network", false, WARMUP_ITERATIONS);
+        // Extended warmup for JVM optimization
+        System.out.println("Warming up JVM (this may take a while)...");
+        for (int i = 0; i < 3; i++) {
+            System.out.printf("Warmup round %d/3...%n", i + 1);
+            runBenchmark("Warmup In-Memory", true, WARMUP_ITERATIONS);
+            runBenchmark("Warmup Network", false, WARMUP_ITERATIONS);
+        }
+
+        // Force GC before actual benchmarks
+        System.gc();
+        Thread.sleep(1000);
 
         // Actual benchmarks
         System.out.println("\nRunning benchmarks...");
 
-        long inMemoryTime = runBenchmark("In-Memory Sockets", true, BENCHMARK_ITERATIONS);
-        long networkTime = runBenchmark("Network Sockets", false, BENCHMARK_ITERATIONS);
+        // Run multiple benchmark rounds for statistical significance
+        long[] inMemoryTimes = new long[5];
+        long[] networkTimes = new long[5];
+
+        for (int round = 0; round < 5; round++) {
+            System.out.printf("Benchmark round %d/5...%n", round + 1);
+            inMemoryTimes[round] = runBenchmark("In-Memory Sockets", true, BENCHMARK_ITERATIONS);
+            networkTimes[round] = runBenchmark("Network Sockets", false, BENCHMARK_ITERATIONS);
+            System.gc(); // GC between rounds
+            Thread.sleep(100);
+        }
+
+        // Calculate averages (excluding best and worst)
+        long inMemoryTime = calculateMedian(inMemoryTimes);
+        long networkTime = calculateMedian(networkTimes);
 
         // Results
         System.out.println("\nResults:");
@@ -47,6 +67,25 @@ public class PerformanceBenchmark {
 
         double speedup = (double) networkTime / inMemoryTime;
         System.out.printf("%nSpeedup: %.2fx faster%n", speedup);
+
+        // Show all times for transparency
+        System.out.printf("%nDetailed times:%n");
+        System.out.printf("In-Memory rounds: ");
+        for (long time : inMemoryTimes) {
+            System.out.printf("%,d ", time);
+        }
+        System.out.printf("ms%n");
+        System.out.printf("Network rounds:   ");
+        for (long time : networkTimes) {
+            System.out.printf("%,d ", time);
+        }
+        System.out.printf("ms%n");
+    }
+
+    private static long calculateMedian(long[] times) {
+        long[] sorted = times.clone();
+        java.util.Arrays.sort(sorted);
+        return sorted[sorted.length / 2]; // Return median
     }
 
     private static long runBenchmark(String name, boolean useInMemory, int iterations) throws Exception {

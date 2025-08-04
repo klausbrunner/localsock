@@ -47,10 +47,16 @@ SocketChannel client = InMemoryChannelProvider.openInMemorySocketChannel(remoteA
 Testing
 -------
 
-Run the JUnit test suite:
+Run the standard test suite (fast):
 
 ```bash
 mvn clean test
+```
+
+Run performance tests (requires explicit activation):
+
+```bash
+mvn clean test -Pperformance
 ```
 
 Or run the demo applications:
@@ -69,12 +75,15 @@ Performance Testing
 Run benchmarks to compare in-memory vs network socket performance:
 
 ```bash
-# Performance comparison
+# Full performance benchmark (proper JVM warmup, ~5 minutes)
 mvn exec:java -pl localsock-benchmark -Dexec.mainClass="com.localsock.benchmark.PerformanceBenchmark"
 
-# Stress test with many concurrent connections
+# Stress test with many concurrent connections  
 mvn exec:java -pl localsock-benchmark -Dexec.mainClass="com.localsock.benchmark.StressBenchmark"
 
-# Reliability tests (JUnit)
-mvn test -pl localsock-benchmark
+# Performance-related JUnit tests
+mvn test -pl localsock-benchmark -Pperformance
+
+# All tests across all modules (excludes performance tests by default)
+mvn clean test
 ```

@@ -1,6 +1,7 @@
 package com.localsock;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.SocketAddress;
 import java.net.SocketOption;
@@ -15,6 +16,8 @@ public class InMemoryServerSocketChannel extends ServerSocketChannel {
     private SocketAddress localAddress;
     private boolean bound = false;
     private String connectionKey;
+    private final java.util.concurrent.locks.ReentrantLock acceptLock = new java.util.concurrent.locks.ReentrantLock();
+    private final java.util.concurrent.locks.Condition connectionAvailable = acceptLock.newCondition();
 
     protected InMemoryServerSocketChannel(SelectorProvider provider) {
         super(provider);
@@ -68,19 +71,25 @@ public class InMemoryServerSocketChannel extends ServerSocketChannel {
 
         // In blocking mode, wait for a connection
         if (isBlocking()) {
-            SocketChannel connection;
-            while ((connection = InMemorySocketRegistry.acceptConnection(connectionKey)) == null) {
-                if (!isOpen()) {
-                    throw new IOException("Channel closed while waiting");
+            acceptLock.lock();
+            try {
+                SocketChannel connection;
+                while ((connection = InMemorySocketRegistry.acceptConnection(connectionKey)) == null) {
+                    if (!isOpen()) {
+                        throw new IOException("Channel closed while waiting");
+                    }
+                    try {
+                        // Efficient blocking using Condition variable
+                        connectionAvailable.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("Interrupted while waiting for connection", e);
+                    }
                 }
-                try {
-                    Thread.sleep(1);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while waiting for connection", e);
-                }
+                return connection;
+            } finally {
+                acceptLock.unlock();
             }
-            return connection;
         } else {
             // Non-blocking mode - return null if no connection
             return InMemorySocketRegistry.acceptConnection(connectionKey);
@@ -104,7 +113,24 @@ public class InMemoryServerSocketChannel extends ServerSocketChannel {
         // In-memory channels can support both blocking and non-blocking modes
     }
 
+    /**
+     * Signal that a connection is available for accept().
+     * Called by the registry when a client connects.
+     */
+    public void signalConnectionAvailable() {
+        acceptLock.lock();
+        try {
+            connectionAvailable.signal();
+        } finally {
+            acceptLock.unlock();
+        }
+    }
+
     private String makeConnectionKey(SocketAddress address) {
-        return address.toString();
+        return switch (address) {
+            case InetSocketAddress inet -> inet.getAddress().getHostAddress() + ":" + inet.getPort();
+            case null -> throw new IllegalArgumentException("Address cannot be null");
+            default -> address.toString();
+        };
     }
 }

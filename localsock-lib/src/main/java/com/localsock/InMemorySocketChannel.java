@@ -9,6 +9,8 @@ import java.nio.channels.SocketChannel;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -21,6 +23,7 @@ public class InMemorySocketChannel extends SocketChannel {
 
     private final ReentrantLock readLock = new ReentrantLock();
     private final ReentrantLock writeLock = new ReentrantLock();
+    private final java.util.concurrent.locks.Condition dataAvailable = readLock.newCondition();
 
     public static final int BUFSIZE = 8192;
     private static final ThreadLocal<ByteBuffer> BUFFER_POOL =
@@ -30,6 +33,7 @@ public class InMemorySocketChannel extends SocketChannel {
     private final String connectionKey;
     final AtomicBoolean connected = new AtomicBoolean(false); // Package private for registry access
     private volatile InMemorySocketChannel peerChannel;
+    private final CountDownLatch connectionReady = new CountDownLatch(1);
 
     protected InMemorySocketChannel(SelectorProvider provider, String connectionKey) {
         super(provider);
@@ -39,6 +43,16 @@ public class InMemorySocketChannel extends SocketChannel {
     public void setPeerChannel(InMemorySocketChannel peer) {
         this.peerChannel = peer;
         this.connected.set(true);
+        // Signal that connection is now ready for I/O
+        this.connectionReady.countDown();
+    }
+
+    /**
+     * Wait for the connection to be fully established (peer channel assigned).
+     * This ensures the channel is ready for I/O operations.
+     */
+    boolean waitForConnection(long timeout, TimeUnit unit) throws InterruptedException {
+        return connectionReady.await(timeout, unit);
     }
 
     @Override
@@ -124,9 +138,29 @@ public class InMemorySocketChannel extends SocketChannel {
 
         readLock.lock();
         try {
-            ByteBuffer data = incomingData.poll();
-            if (data == null) {
-                return 0; // No data available
+            ByteBuffer data;
+
+            // In blocking mode, wait for data to become available
+            if (isBlocking()) {
+                // Block until data becomes available
+                while ((data = incomingData.poll()) == null) {
+                    if (!isOpen()) {
+                        throw new IOException("Channel closed while waiting for data");
+                    }
+                    try {
+                        // Efficient blocking using Condition variable
+                        dataAvailable.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("Interrupted while waiting for data", e);
+                    }
+                }
+            } else {
+                // Non-blocking mode - return immediately if no data
+                data = incomingData.poll();
+                if (data == null) {
+                    return 0; // No data available
+                }
             }
 
             int bytesToRead = Math.min(dst.remaining(), data.remaining());
@@ -186,6 +220,15 @@ public class InMemorySocketChannel extends SocketChannel {
             }
 
             peerChannel.incomingData.offer(copy);
+
+            // Signal peer that data is available
+            peerChannel.readLock.lock();
+            try {
+                peerChannel.dataAvailable.signal();
+            } finally {
+                peerChannel.readLock.unlock();
+            }
+
             return bytesToWrite;
         } finally {
             writeLock.unlock();
